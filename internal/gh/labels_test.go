@@ -1,0 +1,680 @@
+package gh
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"testing"
+
+	"github.com/wimpysworld/tailor/internal/model"
+)
+
+func TestReadLabelsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "[]")
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	labels, err := ReadLabels(client, "testowner", "testrepo")
+	if err != nil {
+		t.Fatalf("ReadLabels() error: %v", err)
+	}
+	if labels == nil {
+		t.Fatal("ReadLabels() returned nil, want empty slice")
+	}
+	if len(labels) != 0 {
+		t.Errorf("ReadLabels() length = %d, want 0", len(labels))
+	}
+}
+
+func TestReadLabelsSinglePage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		labels := []labelResponse{
+			{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+			{Name: "enhancement", Color: "a2eeef", Description: "New feature or request"},
+		}
+		body, _ := json.Marshal(labels)
+		fmt.Fprint(w, string(body))
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	labels, err := ReadLabels(client, "testowner", "testrepo")
+	if err != nil {
+		t.Fatalf("ReadLabels() error: %v", err)
+	}
+	if len(labels) != 2 {
+		t.Fatalf("ReadLabels() length = %d, want 2", len(labels))
+	}
+	if labels[0].Name != "bug" || labels[0].Color != "d73a4a" || labels[0].Description != "Something is not working" {
+		t.Errorf("labels[0] = %+v", labels[0])
+	}
+	if labels[1].Name != "enhancement" || labels[1].Color != "a2eeef" || labels[1].Description != "New feature or request" {
+		t.Errorf("labels[1] = %+v", labels[1])
+	}
+}
+
+func TestReadLabelsPaginated(t *testing.T) {
+	// Build two pages: page 1 has 100 labels, page 2 has 3 labels.
+	page1 := make([]labelResponse, 100)
+	for i := range page1 {
+		page1[i] = labelResponse{
+			Name:  fmt.Sprintf("label-%03d", i),
+			Color: "aabbcc",
+		}
+	}
+	page2 := []labelResponse{
+		{Name: "label-100", Color: "aabbcc"},
+		{Name: "label-101", Color: "aabbcc"},
+		{Name: "label-102", Color: "aabbcc"},
+	}
+
+	page1JSON, _ := json.Marshal(page1)
+	page2JSON, _ := json.Marshal(page2)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageStr := r.URL.Query().Get("page")
+		page, _ := strconv.Atoi(pageStr)
+		switch page {
+		case 1, 0:
+			w.Header().Set("Link", `<https://api.github.com/repos/testowner/testrepo/labels?per_page=100&page=2>; rel="next"`)
+			fmt.Fprint(w, string(page1JSON))
+		case 2:
+			fmt.Fprint(w, string(page2JSON))
+		default:
+			fmt.Fprint(w, "[]")
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	labels, err := ReadLabels(client, "testowner", "testrepo")
+	if err != nil {
+		t.Fatalf("ReadLabels() error: %v", err)
+	}
+	if len(labels) != 103 {
+		t.Errorf("ReadLabels() length = %d, want 103", len(labels))
+	}
+}
+
+func TestReadLabelsAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message": "Not Found"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	_, err := ReadLabels(client, "testowner", "testrepo")
+	if err == nil {
+		t.Fatal("ReadLabels() expected error, got nil")
+	}
+}
+
+func TestApplyLabelsCreatesMissing(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"name":"bug","color":"d73a4a","description":"Something is not working"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, nil)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if gotPath != "/repos/testowner/testrepo/labels" {
+		t.Errorf("path = %s, want /repos/testowner/testrepo/labels", gotPath)
+	}
+	if gotBody["name"] != "bug" {
+		t.Errorf("body name = %q, want %q", gotBody["name"], "bug")
+	}
+	if gotBody["color"] != "d73a4a" {
+		t.Errorf("body color = %q, want %q", gotBody["color"], "d73a4a")
+	}
+	if gotBody["description"] != "Something is not working" {
+		t.Errorf("body description = %q, want %q", gotBody["description"], "Something is not working")
+	}
+}
+
+func TestApplyLabelsPatchesChanged(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"name":"bug","color":"ff0000","description":"Updated desc"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "ff0000", Description: "Updated desc"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH", gotMethod)
+	}
+	if gotPath != "/repos/testowner/testrepo/labels/bug" {
+		t.Errorf("path = %s, want /repos/testowner/testrepo/labels/bug", gotPath)
+	}
+	if gotBody["color"] != "ff0000" {
+		t.Errorf("body color = %q, want %q", gotBody["color"], "ff0000")
+	}
+	if gotBody["description"] != "Updated desc" {
+		t.Errorf("body description = %q, want %q", gotBody["description"], "Updated desc")
+	}
+}
+
+func TestApplyLabelsSkipsMatched(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if requestCount != 0 {
+		t.Errorf("expected 0 API calls for matched labels, got %d", requestCount)
+	}
+}
+
+func TestApplyLabelsCaseInsensitiveMatch(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"name":"Bug","color":"ff0000","description":"Updated"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "ff0000", Description: "Updated"},
+	}
+	current := []model.LabelEntry{
+		{Name: "Bug", Color: "d73a4a", Description: "Old desc"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH", gotMethod)
+	}
+	// URL must use the current GitHub name, not the desired name.
+	if gotPath != "/repos/testowner/testrepo/labels/Bug" {
+		t.Errorf("path = %s, want /repos/testowner/testrepo/labels/Bug", gotPath)
+	}
+}
+
+func TestApplyLabelsCaseInsensitiveSkip(t *testing.T) {
+	// When names match case-insensitively AND case-sensitively, and colour and
+	// description also match, no API call should be made.
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if requestCount != 0 {
+		t.Errorf("expected 0 API calls for exact match, got %d", requestCount)
+	}
+}
+
+func TestApplyLabelsColorCaseInsensitive(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "D73A4A", Description: "desc"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "desc"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if requestCount != 0 {
+		t.Errorf("expected 0 API calls for colour match (case differs), got %d", requestCount)
+	}
+}
+
+func TestApplyLabelsNoDeleteExtraLabels(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+		{Name: "enhancement", Color: "a2eeef", Description: "New feature or request"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if requestCount != 0 {
+		t.Errorf("expected 0 API calls (no prune), got %d", requestCount)
+	}
+}
+
+func TestApplyLabelsMixedOperations(t *testing.T) {
+	type call struct {
+		method string
+		path   string
+	}
+	var calls []call
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, call{method: r.Method, path: r.URL.Path})
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Same"},
+		{Name: "enhancement", Color: "ff0000", Description: "Changed colour"},
+		{Name: "new-label", Color: "00ff00", Description: "Brand new"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Same"},
+		{Name: "enhancement", Color: "a2eeef", Description: "Changed colour"},
+		{Name: "wontfix", Color: "ffffff", Description: "Will not fix"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+
+	// bug: skip (no call), enhancement: PATCH, new-label: POST, wontfix: left alone
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 API calls, got %d: %v", len(calls), calls)
+	}
+	if calls[0].method != http.MethodPatch || calls[0].path != "/repos/testowner/testrepo/labels/enhancement" {
+		t.Errorf("call[0] = %s %s, want PATCH /repos/testowner/testrepo/labels/enhancement", calls[0].method, calls[0].path)
+	}
+	if calls[1].method != http.MethodPost || calls[1].path != "/repos/testowner/testrepo/labels" {
+		t.Errorf("call[1] = %s %s, want POST /repos/testowner/testrepo/labels", calls[1].method, calls[1].path)
+	}
+}
+
+func TestApplyLabelsCreateError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		fmt.Fprint(w, `{"message": "Validation Failed"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "desc"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, nil)
+	if err == nil {
+		t.Fatal("ApplyLabels() expected error from POST, got nil")
+	}
+}
+
+func TestApplyLabelsPatchError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"message": "Internal Server Error"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "ff0000", Description: "new"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "old"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err == nil {
+		t.Fatal("ApplyLabels() expected error from PATCH, got nil")
+	}
+}
+
+func TestHasNextPage(t *testing.T) {
+	tests := []struct {
+		link string
+		want bool
+	}{
+		{`<https://api.github.com/repos/o/r/labels?page=2>; rel="next"`, true},
+		{`<https://api.github.com/repos/o/r/labels?page=1>; rel="prev", <https://api.github.com/repos/o/r/labels?page=3>; rel="next"`, true},
+		{`<https://api.github.com/repos/o/r/labels?page=1>; rel="prev"`, false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := hasNextPage(tt.link); got != tt.want {
+			t.Errorf("hasNextPage(%q) = %v, want %v", tt.link, got, tt.want)
+		}
+	}
+}
+
+func TestApplyLabelsPatchesCasingChange(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"name":"Bug","color":"d73a4a","description":"Something is not working"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "Bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH for casing-only change", gotMethod)
+	}
+	if gotPath != "/repos/testowner/testrepo/labels/bug" {
+		t.Errorf("path = %s, want /repos/testowner/testrepo/labels/bug", gotPath)
+	}
+	if gotBody["new_name"] != "Bug" {
+		t.Errorf("body new_name = %q, want %q", gotBody["new_name"], "Bug")
+	}
+}
+
+func TestUpdateLabelSendsNewName(t *testing.T) {
+	var gotBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "Enhancement", Color: "a2eeef", Description: "New feature"},
+	}
+	current := []model.LabelEntry{
+		{Name: "enhancement", Color: "a2eeef", Description: "Old desc"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if gotBody["new_name"] != "Enhancement" {
+		t.Errorf("body new_name = %q, want %q", gotBody["new_name"], "Enhancement")
+	}
+}
+
+func TestApplyLabelsDescriptionOnlyChange(t *testing.T) {
+	var gotMethod string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Updated description"},
+	}
+	current := []model.LabelEntry{
+		{Name: "bug", Color: "d73a4a", Description: "Old description"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() error: %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH for description-only change", gotMethod)
+	}
+}
+
+func TestApplyLabelsCreate403SkipsAndContinues(t *testing.T) {
+	// When a POST (create) returns 403, the label is skipped and the next
+	// label is still processed.
+	var calls []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		// First POST (alpha) returns 403, second POST (beta) succeeds.
+		if r.URL.Path == "/repos/testowner/testrepo/labels" && len(calls) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message": "Resource not accessible by integration"}`)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "alpha", Color: "aa0000", Description: "first"},
+		{Name: "beta", Color: "bb0000", Description: "second"},
+	}
+
+	result, err := ApplyLabels(client, "testowner", "testrepo", desired, nil)
+	if err != nil {
+		t.Fatalf("ApplyLabels() returned hard error: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 API calls, got %d: %v", len(calls), calls)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Operation != `create label "alpha"` {
+		t.Errorf("skipped operation = %q, want %q", result.Skipped[0].Operation, `create label "alpha"`)
+	}
+	if !isAccessError(result.Skipped[0].Err) {
+		t.Errorf("skipped error is not an access error: %v", result.Skipped[0].Err)
+	}
+}
+
+func TestApplyLabelsUpdate403SkipsAndContinues(t *testing.T) {
+	// When a PATCH (update) returns 403, the label is skipped and the next
+	// label is still processed.
+	var calls []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		// First PATCH (alpha) returns 403, second PATCH (beta) succeeds.
+		if r.Method == http.MethodPatch && r.URL.Path == "/repos/testowner/testrepo/labels/alpha" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message": "Resource not accessible by integration"}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "alpha", Color: "ff0000", Description: "changed"},
+		{Name: "beta", Color: "00ff00", Description: "changed"},
+	}
+	current := []model.LabelEntry{
+		{Name: "alpha", Color: "aa0000", Description: "old"},
+		{Name: "beta", Color: "bb0000", Description: "old"},
+	}
+
+	result, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() returned hard error: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 API calls, got %d: %v", len(calls), calls)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Operation != `update label "alpha"` {
+		t.Errorf("skipped operation = %q, want %q", result.Skipped[0].Operation, `update label "alpha"`)
+	}
+	if !isAccessError(result.Skipped[0].Err) {
+		t.Errorf("skipped error is not an access error: %v", result.Skipped[0].Err)
+	}
+}
+
+func TestApplyLabelsNon403ErrorStillAborts(t *testing.T) {
+	// A non-access error (e.g. 500) on create should still abort.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"message": "Internal Server Error"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "alpha", Color: "aa0000", Description: "first"},
+		{Name: "beta", Color: "bb0000", Description: "second"},
+	}
+
+	_, err := ApplyLabels(client, "testowner", "testrepo", desired, nil)
+	if err == nil {
+		t.Fatal("ApplyLabels() expected hard error from 500, got nil")
+	}
+}
+
+func TestApplyLabelsMixed403AndSuccess(t *testing.T) {
+	// Three labels: create (403), update (success), no-change (no call).
+	// Verifies skipped and applied are both populated correctly.
+	var calls []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message": "Resource not accessible by integration"}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	desired := []model.LabelEntry{
+		{Name: "new-label", Color: "00ff00", Description: "brand new"},
+		{Name: "existing", Color: "ff0000", Description: "changed"},
+		{Name: "unchanged", Color: "aabbcc", Description: "same"},
+	}
+	current := []model.LabelEntry{
+		{Name: "existing", Color: "aabbcc", Description: "old"},
+		{Name: "unchanged", Color: "aabbcc", Description: "same"},
+	}
+
+	result, err := ApplyLabels(client, "testowner", "testrepo", desired, current)
+	if err != nil {
+		t.Fatalf("ApplyLabels() returned hard error: %v", err)
+	}
+	// POST for new-label (403), PATCH for existing (success), no call for unchanged.
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 API calls, got %d: %v", len(calls), calls)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Operation != `create label "new-label"` {
+		t.Errorf("skipped = %q, want %q", result.Skipped[0].Operation, `create label "new-label"`)
+	}
+}

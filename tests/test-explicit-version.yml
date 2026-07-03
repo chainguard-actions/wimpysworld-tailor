@@ -1,0 +1,30 @@
+name: Test explicit version input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install tailor with explicit version
+        id: action
+        uses: .
+        with:
+          version: "0.2.0"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Assert tailor binary is installed
+        run: |
+          if ! command -v tailor &>/dev/null; then
+            echo "FAIL: tailor binary not found in PATH"
+            exit 1
+          fi
+          echo "PASS: tailor is installed at $(command -v tailor)"
+      - name: Assert tailor binary is executable
+        run: |
+          tailor_path="$(command -v tailor)"
+          if [ ! -x "$tailor_path" ]; then
+            echo "FAIL: tailor binary is not executable"
+            exit 1
+          fi
+          echo "PASS: tailor binary is executable"
