@@ -1,0 +1,309 @@
+package config
+
+import (
+	"io/fs"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/wimpysworld/tailor"
+	"github.com/wimpysworld/tailor/internal/model"
+	"github.com/wimpysworld/tailor/internal/ptr"
+	"github.com/wimpysworld/tailor/internal/swatch"
+	"github.com/wimpysworld/tailor/internal/testutil"
+)
+
+func TestDefaultConfigMatchesEmbedded(t *testing.T) {
+	// Parse the embedded config directly for comparison.
+	data, err := fs.ReadFile(tailor.SwatchFS, embeddedConfigPath)
+	if err != nil {
+		t.Fatalf("reading embedded config: %v", err)
+	}
+	var want Config
+	if err := yaml.Unmarshal(data, &want); err != nil {
+		t.Fatalf("unmarshalling embedded config: %v", err)
+	}
+
+	got, err := DefaultConfig("BlueOak-1.0.0")
+	if err != nil {
+		t.Fatalf("DefaultConfig() error: %v", err)
+	}
+
+	// License should be the value we passed, not the embedded one.
+	if got.License != "BlueOak-1.0.0" {
+		t.Errorf("License = %q, want %q", got.License, "BlueOak-1.0.0")
+	}
+
+	// Repository settings should match the embedded config exactly.
+	if got.Repository == nil {
+		t.Fatal("Repository is nil, want non-nil")
+	}
+	testutil.AssertBoolPtr(t, got.Repository.HasWiki, false, false, "has_wiki")
+	testutil.AssertBoolPtr(t, got.Repository.HasDiscussions, false, false, "has_discussions")
+	testutil.AssertBoolPtr(t, got.Repository.HasProjects, false, false, "has_projects")
+	testutil.AssertBoolPtr(t, got.Repository.HasIssues, false, true, "has_issues")
+	testutil.AssertBoolPtr(t, got.Repository.AllowMergeCommit, false, false, "allow_merge_commit")
+	testutil.AssertBoolPtr(t, got.Repository.AllowSquashMerge, false, true, "allow_squash_merge")
+	testutil.AssertBoolPtr(t, got.Repository.AllowRebaseMerge, false, true, "allow_rebase_merge")
+	testutil.AssertStringPtr(t, got.Repository.SquashMergeCommitTitle, false, "PR_TITLE", "squash_merge_commit_title")
+	testutil.AssertStringPtr(t, got.Repository.SquashMergeCommitMessage, false, "PR_BODY", "squash_merge_commit_message")
+	testutil.AssertBoolPtr(t, got.Repository.DeleteBranchOnMerge, false, true, "delete_branch_on_merge")
+	testutil.AssertBoolPtr(t, got.Repository.AllowUpdateBranch, false, true, "allow_update_branch")
+	testutil.AssertBoolPtr(t, got.Repository.AllowAutoMerge, false, true, "allow_auto_merge")
+	testutil.AssertBoolPtr(t, got.Repository.WebCommitSignoffRequired, false, false, "web_commit_signoff_required")
+	testutil.AssertStringPtr(t, got.Repository.DefaultWorkflowPermissions, false, "read", "default_workflow_permissions")
+	testutil.AssertBoolPtr(t, got.Repository.CanApprovePullRequestReviews, false, true, "can_approve_pull_request_reviews")
+
+	// Labels should match the embedded defaults.
+	if len(got.Labels) != 12 {
+		t.Fatalf("Labels count = %d, want 12", len(got.Labels))
+	}
+	wantLabels := []model.LabelEntry{
+		{Name: "bug", Color: "d20f39", Description: "Something isn't working"},
+		{Name: "documentation", Color: "04a5e5", Description: "Documentation improvement"},
+		{Name: "duplicate", Color: "8839ef", Description: "Already exists"},
+		{Name: "enhancement", Color: "1e66f5", Description: "New feature request"},
+		{Name: "good first issue", Color: "40a02b", Description: "Good for newcomers"},
+		{Name: "help wanted", Color: "179299", Description: "Extra attention needed"},
+		{Name: "invalid", Color: "e64553", Description: "Not valid or relevant"},
+		{Name: "question", Color: "7287fd", Description: "Needs more information"},
+		{Name: "wontfix", Color: "dc8a78", Description: "Will not be worked on"},
+		{Name: "dependencies", Color: "fe640b", Description: "Dependency update"},
+		{Name: "github_actions", Color: "ea76cb", Description: "GitHub Actions update"},
+		{Name: "hacktoberfest-accepted", Color: "df8e1d", Description: "Hacktoberfest contribution"},
+	}
+	for i, wl := range wantLabels {
+		gl := got.Labels[i]
+		if gl.Name != wl.Name || gl.Color != wl.Color || gl.Description != wl.Description {
+			t.Errorf("label[%d] = {%q, %q, %q}, want {%q, %q, %q}",
+				i, gl.Name, gl.Color, gl.Description, wl.Name, wl.Color, wl.Description)
+		}
+	}
+
+	// Fields absent from the embedded config should remain nil.
+	if got.Repository.Description != nil {
+		t.Errorf("Description = %q, want nil", *got.Repository.Description)
+	}
+	if got.Repository.Homepage != nil {
+		t.Errorf("Homepage = %q, want nil", *got.Repository.Homepage)
+	}
+	if got.Repository.MergeCommitTitle != nil {
+		t.Errorf("MergeCommitTitle = %q, want nil", *got.Repository.MergeCommitTitle)
+	}
+	if got.Repository.MergeCommitMessage != nil {
+		t.Errorf("MergeCommitMessage = %q, want nil", *got.Repository.MergeCommitMessage)
+	}
+
+	// Swatch count and ordering must match exactly.
+	if len(got.Swatches) != len(want.Swatches) {
+		t.Fatalf("Swatches count = %d, want %d", len(got.Swatches), len(want.Swatches))
+	}
+	for i, g := range got.Swatches {
+		w := want.Swatches[i]
+		if g.Path != w.Path || g.Alteration != w.Alteration {
+			t.Errorf("swatch[%d] = {%q, %q}, want {%q, %q}",
+				i, g.Path, g.Alteration, w.Path, w.Alteration)
+		}
+	}
+}
+
+func TestDefaultConfigSwatchCount(t *testing.T) {
+	cfg, err := DefaultConfig("BlueOak-1.0.0")
+	if err != nil {
+		t.Fatalf("DefaultConfig() error: %v", err)
+	}
+	if len(cfg.Swatches) != 18 {
+		t.Errorf("Swatches count = %d, want 18", len(cfg.Swatches))
+	}
+}
+
+func TestDefaultConfigSwatchOrder(t *testing.T) {
+	cfg, err := DefaultConfig("BlueOak-1.0.0")
+	if err != nil {
+		t.Fatalf("DefaultConfig() error: %v", err)
+	}
+
+	first := cfg.Swatches[0]
+	if first.Path != ".github/workflows/tailor.yml" {
+		t.Errorf("first swatch Path = %q, want %q", first.Path, ".github/workflows/tailor.yml")
+	}
+	if first.Alteration != swatch.Always {
+		t.Errorf("first swatch Alteration = %q, want %q", first.Alteration, swatch.Always)
+	}
+
+	second := cfg.Swatches[1]
+	if second.Path != ".github/dependabot.yml" {
+		t.Errorf("second swatch Path = %q, want %q", second.Path, ".github/dependabot.yml")
+	}
+	if second.Alteration != swatch.FirstFit {
+		t.Errorf("second swatch Alteration = %q, want %q", second.Alteration, swatch.FirstFit)
+	}
+
+	last := cfg.Swatches[len(cfg.Swatches)-1]
+	if last.Path != ".github/workflows/tailor-automerge.yml" {
+		t.Errorf("last swatch Path = %q, want %q", last.Path, ".github/workflows/tailor-automerge.yml")
+	}
+	if last.Alteration != swatch.Triggered {
+		t.Errorf("last swatch Alteration = %q, want %q", last.Alteration, swatch.Triggered)
+	}
+}
+
+func TestMergeRepoSettings(t *testing.T) {
+	tests := []struct {
+		name        string
+		live        *model.RepositorySettings
+		description string
+		wantDesc    *string // nil means expect nil
+		wantHome    *string
+	}{
+		{
+			name: "live settings override defaults entirely",
+			live: &model.RepositorySettings{
+				Description: ptr.Ptr("live desc"),
+				Homepage:    ptr.Ptr("https://live.example.com"),
+				HasWiki:     ptr.Ptr(true),
+				HasIssues:   ptr.Ptr(false),
+			},
+			description: "",
+			wantDesc:    ptr.Ptr("live desc"),
+			wantHome:    ptr.Ptr("https://live.example.com"),
+		},
+		{
+			name: "description flag overrides live description",
+			live: &model.RepositorySettings{
+				Description: ptr.Ptr("live desc"),
+				Homepage:    ptr.Ptr("https://live.example.com"),
+			},
+			description: "flag desc",
+			wantDesc:    ptr.Ptr("flag desc"),
+			wantHome:    ptr.Ptr("https://live.example.com"),
+		},
+		{
+			name: "empty description from live produces nil",
+			live: &model.RepositorySettings{
+				Description: ptr.Ptr(""),
+				Homepage:    ptr.Ptr("https://live.example.com"),
+			},
+			description: "",
+			wantDesc:    nil,
+			wantHome:    ptr.Ptr("https://live.example.com"),
+		},
+		{
+			name: "empty homepage from live produces nil",
+			live: &model.RepositorySettings{
+				Description: ptr.Ptr("live desc"),
+				Homepage:    ptr.Ptr(""),
+			},
+			description: "",
+			wantDesc:    ptr.Ptr("live desc"),
+			wantHome:    nil,
+		},
+		{
+			name: "non-empty description flag with empty live description sets flag value",
+			live: &model.RepositorySettings{
+				Description: ptr.Ptr(""),
+				Homepage:    ptr.Ptr("https://live.example.com"),
+			},
+			description: "flag desc",
+			wantDesc:    ptr.Ptr("flag desc"),
+			wantHome:    ptr.Ptr("https://live.example.com"),
+		},
+		{
+			name: "empty description flag with non-empty live description preserves live value",
+			live: &model.RepositorySettings{
+				Description: ptr.Ptr("live desc"),
+				Homepage:    ptr.Ptr("https://live.example.com"),
+			},
+			description: "",
+			wantDesc:    ptr.Ptr("live desc"),
+			wantHome:    ptr.Ptr("https://live.example.com"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				License: "BlueOak-1.0.0",
+				Repository: &model.RepositorySettings{
+					HasWiki:   ptr.Ptr(false),
+					HasIssues: ptr.Ptr(true),
+				},
+			}
+
+			MergeRepoSettings(cfg, tt.live, tt.description)
+
+			// Repository must point to the live object.
+			if cfg.Repository != tt.live {
+				t.Fatal("Repository was not replaced with live settings")
+			}
+
+			// Check Description.
+			if tt.wantDesc == nil {
+				if cfg.Repository.Description != nil {
+					t.Errorf("Description = %q, want nil", *cfg.Repository.Description)
+				}
+			} else {
+				testutil.AssertStringPtr(t, cfg.Repository.Description, false, *tt.wantDesc, "description")
+			}
+
+			// Check Homepage.
+			if tt.wantHome == nil {
+				if cfg.Repository.Homepage != nil {
+					t.Errorf("Homepage = %q, want nil", *cfg.Repository.Homepage)
+				}
+			} else {
+				testutil.AssertStringPtr(t, cfg.Repository.Homepage, false, *tt.wantHome, "homepage")
+			}
+		})
+	}
+}
+
+func TestMergeRepoSettingsPreservesMergeCommitFields(t *testing.T) {
+	mergeTitle := "PR_TITLE"
+	mergeMessage := "PR_BODY"
+	live := &model.RepositorySettings{
+		Description:        ptr.Ptr("desc"),
+		AllowMergeCommit:   ptr.Ptr(false),
+		MergeCommitTitle:   &mergeTitle,
+		MergeCommitMessage: &mergeMessage,
+	}
+
+	cfg := &Config{License: "BlueOak-1.0.0"}
+	MergeRepoSettings(cfg, live, "")
+
+	testutil.AssertStringPtr(t, cfg.Repository.MergeCommitTitle, false, "PR_TITLE", "merge_commit_title")
+	testutil.AssertStringPtr(t, cfg.Repository.MergeCommitMessage, false, "PR_BODY", "merge_commit_message")
+}
+
+func TestDefaultConfigLicenseValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		license string
+	}{
+		{name: "BlueOak-1.0.0", license: "BlueOak-1.0.0"},
+		{name: "Apache-2.0", license: "Apache-2.0"},
+		{name: "none", license: "none"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := DefaultConfig(tt.license)
+			if err != nil {
+				t.Fatalf("DefaultConfig(%q) error: %v", tt.license, err)
+			}
+			if cfg.License != tt.license {
+				t.Errorf("License = %q, want %q", cfg.License, tt.license)
+			}
+		})
+	}
+}
+
+func TestDefaultConfigEmptyLicenseError(t *testing.T) {
+	_, err := DefaultConfig("")
+	if err == nil {
+		t.Fatal("DefaultConfig(\"\") expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "license must not be empty") {
+		t.Errorf("error = %q, want it to mention license must not be empty", err.Error())
+	}
+}

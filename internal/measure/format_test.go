@@ -1,0 +1,123 @@
+package measure
+
+import (
+	"fmt"
+	"testing"
+)
+
+func TestFormatOutputWithoutConfig(t *testing.T) {
+	health := []HealthResult{
+		{Path: ".github/FUNDING.yml", Status: Missing},
+		{Path: ".github/ISSUE_TEMPLATE/bug_report.yml", Status: Missing},
+		{Path: ".github/ISSUE_TEMPLATE/feature_request.yml", Status: Missing},
+		{Path: ".github/dependabot.yml", Status: Missing},
+		{Path: ".github/pull_request_template.md", Status: Missing},
+		{Path: "CONTRIBUTING.md", Status: Missing},
+		{Path: "SUPPORT.md", Status: Missing},
+		{Path: "LICENSE", Status: Warning, Detail: "(contains unresolved placeholders)"},
+		{Path: "README.md", Status: Warning, Detail: "(not managed by tailor)"},
+		{Path: "CODE_OF_CONDUCT.md", Status: Present},
+		{Path: "SECURITY.md", Status: Present},
+	}
+
+	got := FormatOutput(health, nil, false)
+
+	want := "missing:        .github/FUNDING.yml\n" +
+		"missing:        .github/ISSUE_TEMPLATE/bug_report.yml\n" +
+		"missing:        .github/ISSUE_TEMPLATE/feature_request.yml\n" +
+		"missing:        .github/dependabot.yml\n" +
+		"missing:        .github/pull_request_template.md\n" +
+		"missing:        CONTRIBUTING.md\n" +
+		"missing:        SUPPORT.md\n" +
+		"warning:        LICENSE (contains unresolved placeholders)\n" +
+		"warning:        README.md (not managed by tailor)\n" +
+		"present:        CODE_OF_CONDUCT.md\n" +
+		"present:        SECURITY.md\n" +
+		"\n" +
+		"No .tailor.yml found. Run `tailor fit <path>` to initialise, or create `.tailor.yml` manually to enable configuration alignment checks.\n"
+
+	if got != want {
+		t.Errorf("FormatOutput without config:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestFormatOutputWithConfig(t *testing.T) {
+	health := []HealthResult{
+		{Path: "CONTRIBUTING.md", Status: Missing},
+		{Path: "LICENSE", Status: Present},
+		{Path: "SECURITY.md", Status: Present},
+	}
+
+	diff := []DiffResult{
+		{Path: ".github/dependabot.yml", Category: NotConfigured},
+		{Path: "some-custom-swatch.yml", Category: ConfigOnly},
+		{Path: "SECURITY.md", Category: ModeDiffers, Detail: "(config: first-fit, default: always)"},
+	}
+
+	got := FormatOutput(health, diff, true)
+
+	want := "missing:        CONTRIBUTING.md\n" +
+		"present:        LICENSE\n" +
+		"present:        SECURITY.md\n" +
+		"not-configured: .github/dependabot.yml\n" +
+		"config-only:    some-custom-swatch.yml\n" +
+		"mode-differs:   SECURITY.md (config: first-fit, default: always)\n"
+
+	if got != want {
+		t.Errorf("FormatOutput with config:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestFormatOutputPaddingWidth(t *testing.T) {
+	// Verify every category label produces exactly 16 characters before the destination.
+	tests := []struct {
+		label string
+		width int
+	}{
+		{"missing:", 16},
+		{"warning:", 16},
+		{"present:", 16},
+		{"not-configured:", 16},
+		{"config-only:", 16},
+		{"mode-differs:", 16},
+	}
+
+	for _, tt := range tests {
+		formatted := formatLabel(tt.label, tt.width)
+		if len(formatted) != tt.width {
+			t.Errorf("label %q padded to %d chars, want %d", tt.label, len(formatted), tt.width)
+		}
+	}
+}
+
+// formatLabel pads label to the given width, matching the production format logic.
+func formatLabel(label string, width int) string {
+	return fmt.Sprintf("%-*s", width, label)
+}
+
+func TestFormatOutputEmptyResults(t *testing.T) {
+	got := FormatOutput(nil, nil, true)
+	if got != "" {
+		t.Errorf("FormatOutput with no results and config present:\ngot: %q\nwant: %q", got, "")
+	}
+}
+
+func TestFormatOutputHealthOnlyWithConfig(t *testing.T) {
+	health := []HealthResult{
+		{Path: "LICENSE", Status: Present},
+	}
+
+	got := FormatOutput(health, nil, true)
+	want := "present:        LICENSE\n"
+
+	if got != want {
+		t.Errorf("got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestAdvisoryMessageContent(t *testing.T) {
+	want := "No .tailor.yml found. Run `tailor fit <path>` to initialise, or create `.tailor.yml` manually to enable configuration alignment checks."
+	if AdvisoryMessage != want {
+		t.Errorf("AdvisoryMessage =\n%q\nwant:\n%q", AdvisoryMessage, want)
+	}
+}

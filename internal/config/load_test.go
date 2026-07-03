@@ -1,0 +1,296 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/wimpysworld/tailor/internal/testutil"
+)
+
+func TestLoadValidConfig(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, specYAML)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.License != "BlueOak-1.0.0" {
+		t.Errorf("License = %q, want %q", cfg.License, "BlueOak-1.0.0")
+	}
+	if cfg.Repository == nil {
+		t.Fatal("Repository is nil")
+	}
+	if len(cfg.Swatches) != 17 {
+		t.Errorf("Swatches count = %d, want 17", len(cfg.Swatches))
+	}
+}
+
+func TestLoadMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() expected error for missing file, got nil")
+	}
+	if !strings.Contains(err.Error(), "reading config") {
+		t.Errorf("error = %q, want it to mention reading config", err.Error())
+	}
+}
+
+func TestLoadMalformedYAML(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, "{{invalid yaml content")
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() expected error for malformed YAML, got nil")
+	}
+	if !strings.Contains(err.Error(), "parsing config") {
+		t.Errorf("error = %q, want it to mention parsing config", err.Error())
+	}
+}
+
+func TestLoadTriggeredAlterationMode(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+swatches:
+  - path: justfile
+    alteration: triggered
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Swatches[0].Alteration != "triggered" {
+		t.Errorf("Alteration = %q, want %q", cfg.Swatches[0].Alteration, "triggered")
+	}
+}
+
+func TestLoadNeverAlterationMode(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+swatches:
+  - path: justfile
+    alteration: never
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Swatches[0].Alteration != "never" {
+		t.Errorf("Alteration = %q, want %q", cfg.Swatches[0].Alteration, "never")
+	}
+}
+
+func TestLoadInvalidAlterationMode(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+swatches:
+  - path: justfile
+    alteration: sometimes
+`)
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() expected error for invalid alteration, got nil")
+	}
+	if !strings.Contains(err.Error(), `"sometimes"`) {
+		t.Errorf("error = %q, want it to mention the invalid value", err.Error())
+	}
+}
+
+func TestLoadEmptyPath(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+swatches:
+  - path: ""
+    alteration: always
+`)
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() expected error for empty path, got nil")
+	}
+	if !strings.Contains(err.Error(), "path must not be empty") {
+		t.Errorf("error = %q, want path must not be empty", err.Error())
+	}
+}
+
+func TestLoadLabelsAbsent(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+swatches: []
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Labels != nil {
+		t.Errorf("Labels = %v, want nil when absent", cfg.Labels)
+	}
+}
+
+func TestLoadLabelsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+labels: []
+swatches: []
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Labels == nil {
+		t.Fatal("Labels is nil, want non-nil empty slice")
+	}
+	if len(cfg.Labels) != 0 {
+		t.Errorf("Labels length = %d, want 0", len(cfg.Labels))
+	}
+}
+
+func TestLoadLabelsPopulated(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+labels:
+  - name: bug
+    color: d73a4a
+    description: Something is not working
+swatches: []
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Labels) != 1 {
+		t.Fatalf("Labels count = %d, want 1", len(cfg.Labels))
+	}
+	if cfg.Labels[0].Name != "bug" {
+		t.Errorf("Labels[0].Name = %q, want %q", cfg.Labels[0].Name, "bug")
+	}
+}
+
+func TestLoadRejectsInvalidLabel(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+labels:
+  - name: bug
+    color: zzzzzz
+    description: Something is not working
+swatches: []
+`)
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() expected error for invalid label color, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a valid 6-character hex") {
+		t.Errorf("error = %q, want hex validation error", err)
+	}
+}
+
+func TestExistsTrue(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, "license: BlueOak-1.0.0\nswatches: []\n")
+
+	if !Exists(dir) {
+		t.Error("Exists() = false, want true")
+	}
+}
+
+func TestExistsFalse(t *testing.T) {
+	dir := t.TempDir()
+
+	if Exists(dir) {
+		t.Error("Exists() = true, want false")
+	}
+}
+
+func TestExistsFalseForDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// Create .tailor.yml as a directory, not a file.
+	if err := os.MkdirAll(filepath.Join(dir, ".tailor.yml"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if Exists(dir) {
+		t.Error("Exists() = true for a directory, want false")
+	}
+}
+
+func TestLoadAbsentLicense(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `swatches:
+  - path: justfile
+    alteration: always
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.License != "" {
+		t.Errorf("License = %q, want empty string for absent key", cfg.License)
+	}
+}
+
+func TestLoadEmptyLicense(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: ""
+swatches:
+  - path: justfile
+    alteration: always
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.License != "" {
+		t.Errorf("License = %q, want empty string", cfg.License)
+	}
+}
+
+func TestLoadEmptySwatchesList(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: BlueOak-1.0.0
+swatches: []
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if len(cfg.Swatches) != 0 {
+		t.Errorf("Swatches count = %d, want 0", len(cfg.Swatches))
+	}
+}
+
+func TestLoadWithoutRepositorySection(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteConfig(t, dir, `license: Apache-2.0
+swatches:
+  - path: justfile
+    alteration: first-fit
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Repository != nil {
+		t.Errorf("Repository = %+v, want nil when section is absent", cfg.Repository)
+	}
+	if cfg.License != "Apache-2.0" {
+		t.Errorf("License = %q, want %q", cfg.License, "Apache-2.0")
+	}
+}

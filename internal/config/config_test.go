@@ -1,0 +1,540 @@
+package config
+
+import (
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/wimpysworld/tailor/internal/model"
+	"github.com/wimpysworld/tailor/internal/ptr"
+	"github.com/wimpysworld/tailor/internal/swatch"
+	"github.com/wimpysworld/tailor/internal/testutil"
+)
+
+// specYAML is the exact config body from the specification, minus the leading
+// comment which is not part of the data model.
+const specYAML = `license: BlueOak-1.0.0
+
+repository:
+  has_wiki: false
+  has_discussions: false
+  has_projects: false
+  has_issues: true
+  allow_merge_commit: false
+  allow_squash_merge: true
+  allow_rebase_merge: true
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: PR_BODY
+  delete_branch_on_merge: true
+  allow_update_branch: true
+  allow_auto_merge: true
+  web_commit_signoff_required: false
+
+swatches:
+  - path: .github/workflows/tailor.yml
+    alteration: always
+
+  - path: .github/dependabot.yml
+    alteration: first-fit
+
+  - path: .github/FUNDING.yml
+    alteration: first-fit
+
+  - path: .github/ISSUE_TEMPLATE/bug_report.yml
+    alteration: always
+
+  - path: .github/ISSUE_TEMPLATE/feature_request.yml
+    alteration: always
+
+  - path: .github/ISSUE_TEMPLATE/config.yml
+    alteration: first-fit
+
+  - path: .github/pull_request_template.md
+    alteration: always
+
+  - path: SECURITY.md
+    alteration: always
+
+  - path: CODE_OF_CONDUCT.md
+    alteration: always
+
+  - path: CONTRIBUTING.md
+    alteration: always
+
+  - path: SUPPORT.md
+    alteration: always
+
+  - path: justfile
+    alteration: first-fit
+
+  - path: flake.nix
+    alteration: first-fit
+
+  - path: .gitignore
+    alteration: first-fit
+
+  - path: .envrc
+    alteration: first-fit
+
+  - path: .tailor.yml
+    alteration: always
+
+  - path: .github/workflows/tailor-automerge.yml
+    alteration: triggered
+`
+
+func TestUnmarshalSpecYAML(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(specYAML), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if cfg.License != "BlueOak-1.0.0" {
+		t.Errorf("License = %q, want %q", cfg.License, "BlueOak-1.0.0")
+	}
+
+	if cfg.Repository == nil {
+		t.Fatal("Repository is nil, want non-nil")
+	}
+
+	r := cfg.Repository
+	testutil.AssertBoolPtr(t, r.HasWiki, false, false, "has_wiki")
+	testutil.AssertBoolPtr(t, r.HasDiscussions, false, false, "has_discussions")
+	testutil.AssertBoolPtr(t, r.HasProjects, false, false, "has_projects")
+	testutil.AssertBoolPtr(t, r.HasIssues, false, true, "has_issues")
+	testutil.AssertBoolPtr(t, r.AllowMergeCommit, false, false, "allow_merge_commit")
+	testutil.AssertBoolPtr(t, r.AllowSquashMerge, false, true, "allow_squash_merge")
+	testutil.AssertBoolPtr(t, r.AllowRebaseMerge, false, true, "allow_rebase_merge")
+	testutil.AssertStringPtr(t, r.SquashMergeCommitTitle, false, "PR_TITLE", "squash_merge_commit_title")
+	testutil.AssertStringPtr(t, r.SquashMergeCommitMessage, false, "PR_BODY", "squash_merge_commit_message")
+	testutil.AssertBoolPtr(t, r.DeleteBranchOnMerge, false, true, "delete_branch_on_merge")
+	testutil.AssertBoolPtr(t, r.AllowUpdateBranch, false, true, "allow_update_branch")
+	testutil.AssertBoolPtr(t, r.AllowAutoMerge, false, true, "allow_auto_merge")
+	testutil.AssertBoolPtr(t, r.WebCommitSignoffRequired, false, false, "web_commit_signoff_required")
+
+	if len(cfg.Swatches) != 17 {
+		t.Fatalf("Swatches count = %d, want 17", len(cfg.Swatches))
+	}
+
+	// Spot-check the first and last swatch entries.
+	first := cfg.Swatches[0]
+	if first.Path != ".github/workflows/tailor.yml" {
+		t.Errorf("first swatch Path = %q", first.Path)
+	}
+	if first.Alteration != swatch.Always {
+		t.Errorf("first swatch Alteration = %q", first.Alteration)
+	}
+
+	last := cfg.Swatches[16]
+	if last.Path != ".github/workflows/tailor-automerge.yml" {
+		t.Errorf("last swatch Path = %q", last.Path)
+	}
+	if last.Alteration != swatch.Triggered {
+		t.Errorf("last swatch Alteration = %q", last.Alteration)
+	}
+}
+
+func TestMarshalRoundTrip(t *testing.T) {
+	var original Config
+	if err := yaml.Unmarshal([]byte(specYAML), &original); err != nil {
+		t.Fatalf("initial Unmarshal failed: %v", err)
+	}
+
+	out, err := yaml.Marshal(&original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var roundTripped Config
+	if err := yaml.Unmarshal(out, &roundTripped); err != nil {
+		t.Fatalf("round-trip Unmarshal failed: %v", err)
+	}
+
+	if roundTripped.License != original.License {
+		t.Errorf("License = %q, want %q", roundTripped.License, original.License)
+	}
+
+	if roundTripped.Repository == nil {
+		t.Fatal("round-tripped Repository is nil")
+	}
+
+	if len(roundTripped.Swatches) != len(original.Swatches) {
+		t.Fatalf("Swatches count = %d, want %d", len(roundTripped.Swatches), len(original.Swatches))
+	}
+
+	for i, s := range roundTripped.Swatches {
+		o := original.Swatches[i]
+		if s.Path != o.Path || s.Alteration != o.Alteration {
+			t.Errorf("swatch[%d] mismatch: got {%q, %q}, want {%q, %q}",
+				i, s.Path, s.Alteration, o.Path, o.Alteration)
+		}
+	}
+}
+
+func TestRepositoryNilWhenAbsent(t *testing.T) {
+	input := `license: MIT
+swatches:
+  - path: justfile
+    alteration: first-fit
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if cfg.Repository != nil {
+		t.Errorf("Repository = %+v, want nil when section is absent", cfg.Repository)
+	}
+}
+
+func TestRepositoryOmittedInMarshalWhenNil(t *testing.T) {
+	cfg := Config{
+		License: "MIT",
+		Swatches: []SwatchEntry{
+			{Path: "justfile", Alteration: swatch.FirstFit},
+		},
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	if strings.Contains(string(out), "repository") {
+		t.Errorf("marshalled output contains 'repository' when Repository is nil:\n%s", out)
+	}
+}
+
+func TestOptionalRepositoryFieldsOmitted(t *testing.T) {
+	cfg := Config{
+		License: "MIT",
+		Repository: &model.RepositorySettings{
+			HasWiki: ptr.Ptr(false),
+		},
+		Swatches: []SwatchEntry{
+			{Path: "justfile", Alteration: swatch.FirstFit},
+		},
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	s := string(out)
+	if !strings.Contains(s, "has_wiki") {
+		t.Error("expected has_wiki in output")
+	}
+	if strings.Contains(s, "has_discussions") {
+		t.Error("has_discussions should be omitted when nil")
+	}
+}
+
+func TestNewRepositoryFieldsParsing(t *testing.T) {
+	input := `license: MIT
+repository:
+  topics:
+    - go
+    - cli-tool
+  default_workflow_permissions: read
+  can_approve_pull_request_reviews: false
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	r := cfg.Repository
+	testutil.AssertStringPtr(t, r.DefaultWorkflowPermissions, false, "read", "default_workflow_permissions")
+	testutil.AssertBoolPtr(t, r.CanApprovePullRequestReviews, false, false, "can_approve_pull_request_reviews")
+
+	if r.Topics == nil {
+		t.Fatal("Topics is nil, want non-nil")
+	}
+	got := *r.Topics
+	if len(got) != 2 || got[0] != "go" || got[1] != "cli-tool" {
+		t.Errorf("Topics = %v, want [go cli-tool]", got)
+	}
+}
+
+func TestNewFieldsOmittedWhenNil(t *testing.T) {
+	input := `license: MIT
+repository:
+  has_wiki: false
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	r := cfg.Repository
+	testutil.AssertStringPtr(t, r.DefaultWorkflowPermissions, true, "", "default_workflow_permissions")
+	testutil.AssertBoolPtr(t, r.CanApprovePullRequestReviews, true, false, "can_approve_pull_request_reviews")
+
+	if r.Topics != nil {
+		t.Errorf("Topics = %v, want nil when omitted", *r.Topics)
+	}
+}
+
+func TestTopicsEmptySlice(t *testing.T) {
+	input := `license: MIT
+repository:
+  topics: []
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	r := cfg.Repository
+	if r.Topics == nil {
+		t.Fatal("Topics is nil, want non-nil empty slice")
+	}
+	if len(*r.Topics) != 0 {
+		t.Errorf("Topics length = %d, want 0", len(*r.Topics))
+	}
+}
+
+func TestNewFieldsRoundTrip(t *testing.T) {
+	topics := []string{"go", "cli-tool"}
+	cfg := Config{
+		License: "MIT",
+		Repository: &model.RepositorySettings{
+			Topics:                       &topics,
+			DefaultWorkflowPermissions:   ptr.Ptr("write"),
+			CanApprovePullRequestReviews: ptr.Ptr(true),
+		},
+		Swatches: []SwatchEntry{
+			{Path: "justfile", Alteration: swatch.FirstFit},
+		},
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var roundTripped Config
+	if err := yaml.Unmarshal(out, &roundTripped); err != nil {
+		t.Fatalf("round-trip Unmarshal failed: %v", err)
+	}
+
+	r := roundTripped.Repository
+	testutil.AssertStringPtr(t, r.DefaultWorkflowPermissions, false, "write", "default_workflow_permissions")
+	testutil.AssertBoolPtr(t, r.CanApprovePullRequestReviews, false, true, "can_approve_pull_request_reviews")
+
+	if r.Topics == nil {
+		t.Fatal("round-tripped Topics is nil")
+	}
+	got := *r.Topics
+	if len(got) != 2 || got[0] != "go" || got[1] != "cli-tool" {
+		t.Errorf("round-tripped Topics = %v, want [go cli-tool]", got)
+	}
+}
+
+func TestNewFieldsOmittedInMarshal(t *testing.T) {
+	cfg := Config{
+		License: "MIT",
+		Repository: &model.RepositorySettings{
+			HasWiki: ptr.Ptr(false),
+		},
+		Swatches: []SwatchEntry{
+			{Path: "justfile", Alteration: swatch.FirstFit},
+		},
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	s := string(out)
+	for _, field := range []string{
+		"topics",
+		"default_workflow_permissions",
+		"can_approve_pull_request_reviews",
+	} {
+		if strings.Contains(s, field) {
+			t.Errorf("%s should be omitted when nil", field)
+		}
+	}
+}
+
+func TestLabelsNilWhenAbsent(t *testing.T) {
+	input := `license: MIT
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if cfg.Labels != nil {
+		t.Errorf("Labels = %v, want nil when absent", cfg.Labels)
+	}
+}
+
+func TestLabelsEmptySliceWhenEmpty(t *testing.T) {
+	input := `license: MIT
+labels: []
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if cfg.Labels == nil {
+		t.Fatal("Labels is nil, want non-nil empty slice")
+	}
+	if len(cfg.Labels) != 0 {
+		t.Errorf("Labels length = %d, want 0", len(cfg.Labels))
+	}
+}
+
+func TestLabelsPopulated(t *testing.T) {
+	input := `license: MIT
+labels:
+  - name: bug
+    color: d73a4a
+    description: Something is not working
+  - name: enhancement
+    color: a2eeef
+    description: New feature or request
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if len(cfg.Labels) != 2 {
+		t.Fatalf("Labels count = %d, want 2", len(cfg.Labels))
+	}
+	if cfg.Labels[0].Name != "bug" {
+		t.Errorf("Labels[0].Name = %q, want %q", cfg.Labels[0].Name, "bug")
+	}
+	if cfg.Labels[0].Color != "d73a4a" {
+		t.Errorf("Labels[0].Color = %q, want %q", cfg.Labels[0].Color, "d73a4a")
+	}
+	if cfg.Labels[0].Description != "Something is not working" {
+		t.Errorf("Labels[0].Description = %q", cfg.Labels[0].Description)
+	}
+	if cfg.Labels[1].Name != "enhancement" {
+		t.Errorf("Labels[1].Name = %q, want %q", cfg.Labels[1].Name, "enhancement")
+	}
+}
+
+func TestLabelsRoundTrip(t *testing.T) {
+	cfg := Config{
+		License: "MIT",
+		Labels: []model.LabelEntry{
+			{Name: "bug", Color: "d73a4a", Description: "Something is not working"},
+			{Name: "enhancement", Color: "a2eeef", Description: "New feature or request"},
+		},
+		Swatches: []SwatchEntry{
+			{Path: "justfile", Alteration: swatch.FirstFit},
+		},
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var roundTripped Config
+	if err := yaml.Unmarshal(out, &roundTripped); err != nil {
+		t.Fatalf("round-trip Unmarshal failed: %v", err)
+	}
+
+	if len(roundTripped.Labels) != 2 {
+		t.Fatalf("Labels count = %d, want 2", len(roundTripped.Labels))
+	}
+	for i, l := range roundTripped.Labels {
+		o := cfg.Labels[i]
+		if l.Name != o.Name || l.Color != o.Color || l.Description != o.Description {
+			t.Errorf("label[%d] mismatch: got {%q, %q, %q}, want {%q, %q, %q}",
+				i, l.Name, l.Color, l.Description, o.Name, o.Color, o.Description)
+		}
+	}
+}
+
+func TestLabelsOmittedInMarshalWhenNil(t *testing.T) {
+	cfg := Config{
+		License: "MIT",
+		Swatches: []SwatchEntry{
+			{Path: "justfile", Alteration: swatch.FirstFit},
+		},
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	if strings.Contains(string(out), "labels") {
+		t.Errorf("marshalled output contains 'labels' when Labels is nil:\n%s", out)
+	}
+}
+
+func TestLabelNeedsUpdateCasingDiffers(t *testing.T) {
+	existing := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "desc"}
+	desired := model.LabelEntry{Name: "Bug", Color: "d73a4a", Description: "desc"}
+	if !model.LabelNeedsUpdate(existing, desired) {
+		t.Error("LabelNeedsUpdate() = false, want true when name casing differs")
+	}
+}
+
+func TestLabelNeedsUpdateExactMatch(t *testing.T) {
+	existing := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "desc"}
+	desired := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "desc"}
+	if model.LabelNeedsUpdate(existing, desired) {
+		t.Error("LabelNeedsUpdate() = true, want false when labels are identical")
+	}
+}
+
+func TestLabelNeedsUpdateColourDiffers(t *testing.T) {
+	existing := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "desc"}
+	desired := model.LabelEntry{Name: "bug", Color: "ff0000", Description: "desc"}
+	if !model.LabelNeedsUpdate(existing, desired) {
+		t.Error("LabelNeedsUpdate() = false, want true when colour differs")
+	}
+}
+
+func TestLabelNeedsUpdateDescriptionDiffers(t *testing.T) {
+	existing := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "old"}
+	desired := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "new"}
+	if !model.LabelNeedsUpdate(existing, desired) {
+		t.Error("LabelNeedsUpdate() = false, want true when description differs")
+	}
+}
+
+func TestLabelNeedsUpdateColourCaseInsensitive(t *testing.T) {
+	existing := model.LabelEntry{Name: "bug", Color: "D73A4A", Description: "desc"}
+	desired := model.LabelEntry{Name: "bug", Color: "d73a4a", Description: "desc"}
+	if model.LabelNeedsUpdate(existing, desired) {
+		t.Error("LabelNeedsUpdate() = true, want false when colour differs only in casing")
+	}
+}
+
+func TestRepositoryStringFields(t *testing.T) {
+	input := `license: MIT
+repository:
+  description: My project
+  homepage: https://example.com
+  merge_commit_title: PR_TITLE
+  merge_commit_message: PR_BODY
+swatches: []
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	r := cfg.Repository
+	testutil.AssertStringPtr(t, r.Description, false, "My project", "description")
+	testutil.AssertStringPtr(t, r.Homepage, false, "https://example.com", "homepage")
+	testutil.AssertStringPtr(t, r.MergeCommitTitle, false, "PR_TITLE", "merge_commit_title")
+	testutil.AssertStringPtr(t, r.MergeCommitMessage, false, "PR_BODY", "merge_commit_message")
+}

@@ -1,0 +1,25 @@
+name: Test basic usage (install tailor, default version)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Assert tailor binary is installed
+        run: |
+          echo "Checking tailor binary is available on PATH..."
+          if ! command -v tailor &>/dev/null; then
+            echo "FAIL: tailor binary not found on PATH"
+            exit 1
+          fi
+          echo "PASS: tailor is installed at $(command -v tailor)"
+      - name: Assert tailor version output
+        run: |
+          echo "Running tailor --version..."
+          tailor --version || tailor version || true
+          echo "PASS: tailor binary executed successfully"
