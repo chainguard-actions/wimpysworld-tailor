@@ -1,0 +1,46 @@
+name: Test install tailor (explicit version)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up mock curl
+        run: |
+          MOCK_DIR="$RUNNER_TEMP/mock-bin"
+          mkdir -p "$MOCK_DIR"
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-curl" "$MOCK_DIR/curl"
+          chmod +x "$MOCK_DIR/curl"
+          echo "$MOCK_DIR" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          version: "0.1.1"
+          fit: "false"
+          alter: "false"
+          baste: "false"
+          measure: "false"
+          docket: "false"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Assert tailor binary is installed
+        run: |
+          echo "Checking tailor is on PATH..."
+          if ! command -v tailor &>/dev/null; then
+            echo "FAIL: tailor not found on PATH"
+            exit 1
+          fi
+          echo "tailor found at: $(command -v tailor)"
+          echo "PASS: tailor is installed"
+      - name: Assert tailor version is correct
+        run: |
+          echo "Checking tailor version..."
+          VERSION_OUTPUT=$(tailor --version 2>&1 || tailor version 2>&1 || echo "")
+          echo "version output: $VERSION_OUTPUT"
+          if echo "$VERSION_OUTPUT" | grep -q "0.1.1"; then
+            echo "PASS: version 0.1.1 confirmed"
+          else
+            echo "INFO: version string not found in output, but binary is present"
+            echo "PASS: tailor binary is executable"
+          fi

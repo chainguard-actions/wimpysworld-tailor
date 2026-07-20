@@ -67,9 +67,10 @@ runs:
         else
           v=$(gh api "repos/${ACTION_REPO}/releases/latest" --jq '.tag_name')
         fi
-        safe_v=$(printf '%s' "${v}" | tr -d '\n\r')
-        echo "tag=${safe_v}" >> "$GITHUB_OUTPUT"
-        echo "version=${safe_v#v}" >> "$GITHUB_OUTPUT"
+        safe_tag=$(printf '%s' "${v}" | tr -d '\n\r')
+        safe_version=$(printf '%s' "${v#v}" | tr -d '\n\r')
+        echo "tag=${safe_tag}" >> "$GITHUB_OUTPUT"
+        echo "version=${safe_version}" >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ github.token }}
         INPUT_VERSION: ${{ inputs.version }}

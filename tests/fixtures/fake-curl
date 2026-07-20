@@ -1,0 +1,39 @@
+#!/bin/sh
+# Fake curl: intercepts tailor binary download, supports both pipe and -o FILE forms
+out=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o|--output) out="$arg" ;;
+  esac
+  prev="$arg"
+done
+
+# Check if this is a tailor binary download
+case "$*" in
+  *tailor-linux*|*tailor-darwin*|*tailor-*)
+    # Create a minimal fake tailor binary (a shell script that acts like tailor)
+    payload='#!/bin/sh
+case "$1" in
+  --version|version) echo "tailor version 0.1.1" ;;
+  measure) echo "tailor measure: OK" ;;
+  docket) echo "tailor docket: OK" ;;
+  fit) echo "tailor fit: OK" ;;
+  alter) echo "tailor alter: OK" ;;
+  baste) echo "tailor baste: OK" ;;
+  *) echo "tailor $*" ;;
+esac
+exit 0
+'
+    if [ -n "$out" ]; then
+      printf '%s' "$payload" > "$out"
+      chmod +x "$out"
+    else
+      printf '%s' "$payload"
+    fi
+    exit 0
+    ;;
+esac
+
+# Fall through to real curl for other URLs
+exec /usr/bin/curl "$@"

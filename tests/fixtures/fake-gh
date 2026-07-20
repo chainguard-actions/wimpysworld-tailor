@@ -1,0 +1,18 @@
+#!/bin/sh
+# Fake gh: intercepts gh api calls for tailor releases
+# Outputs values as jq would (unquoted strings), since the action uses --jq flags
+case "$*" in
+  *releases/latest*)
+    echo "v0.1.1"
+    exit 0
+    ;;
+  *releases*)
+    # Return a JSON array of releases for paginated queries (used with --jq)
+    # The action uses: --jq "[.[] | select(.prerelease == false) | .tag_name | select(startswith(\"v${major}.\"))] | first"
+    echo "v0.1.1"
+    exit 0
+    ;;
+esac
+
+# Fall through to real gh for other commands
+exec /usr/bin/gh "$@"

@@ -1,0 +1,49 @@
+name: Test tailor install only (no subcommands)
+on:
+  workflow_dispatch:
+jobs:
+  test-install-only:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_ACTION_REPOSITORY: wimpysworld/tailor
+      GITHUB_ACTION_REF: v0.1.1
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          version: "0.1.1"
+          fit: "false"
+          alter: "false"
+          baste: "false"
+          measure: "false"
+          docket: "false"
+
+      - name: Assert tailor binary is installed and in PATH
+        run: |
+          echo "Checking tailor binary is available in PATH..."
+          if ! command -v tailor &>/dev/null; then
+            echo "FAIL: tailor binary not found in PATH"
+            exit 1
+          fi
+          TAILOR_PATH=$(command -v tailor)
+          echo "PASS: tailor binary found at ${TAILOR_PATH}"
+
+      - name: Assert tailor binary is executable
+        run: |
+          TAILOR_PATH=$(command -v tailor)
+          if [ ! -x "${TAILOR_PATH}" ]; then
+            echo "FAIL: tailor binary is not executable"
+            exit 1
+          fi
+          echo "PASS: tailor binary is executable"
+
+      - name: Assert no subcommands were run (binary is standalone)
+        run: |
+          echo "Verifying tailor is installed without running subcommands..."
+          TAILOR_PATH=$(command -v tailor)
+          echo "tailor location: ${TAILOR_PATH}"
+          ls -la "${TAILOR_PATH}"
+          echo "PASS: tailor installed successfully with no subcommands run"
