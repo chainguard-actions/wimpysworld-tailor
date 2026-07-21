@@ -1,0 +1,40 @@
+name: Test default version resolution (latest release)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up fake gh, curl and tailor binary
+        run: |
+          mkdir -p /tmp/fake-bin
+
+          # Create a fake tailor binary payload using printf
+          printf '#!/bin/sh\necho "tailor fake binary"\nexit 0\n' > /tmp/fake-tailor.sh
+          chmod +x /tmp/fake-tailor.sh
+
+          # Create a fake gh CLI that returns a version for releases/latest
+          # The action uses: gh api "repos/.../releases/latest" --jq '.tag_name'
+          # We intercept by returning the already-extracted value directly
+          printf '#!/bin/sh\njq_filter=""\nprev=""\nfor arg in "$@"; do\n  case "$prev" in\n    --jq) jq_filter="$arg" ;;\n  esac\n  prev="$arg"\ndone\ncase "$*" in\n  *releases/latest*)\n    case "$jq_filter" in\n      *.tag_name*)\n        echo "v0.1.2"\n        ;;\n      *)\n        printf '"'"'{"tag_name":"v0.1.2","prerelease":false}\n'"'"'\n        ;;\n    esac\n    exit 0\n    ;;\n  *releases*)\n    echo "v0.1.2"\n    exit 0\n    ;;\nesac\nexec /usr/bin/gh "$@"\n' > /tmp/fake-bin/gh
+          chmod +x /tmp/fake-bin/gh
+
+          # Create a fake curl that intercepts tailor binary downloads and honors -o flag
+          printf '#!/bin/sh\nout=""\nprev=""\nfor arg in "$@"; do\n  case "$prev" in\n    -o|--output) out="$arg" ;;\n  esac\n  prev="$arg"\ndone\ncase "$*" in\n  *tailor*)\n    if [ -n "$out" ]; then\n      cat /tmp/fake-tailor.sh > "$out"\n      chmod +x "$out"\n    else\n      cat /tmp/fake-tailor.sh\n    fi\n    exit 0\n    ;;\nesac\nexec /usr/bin/curl "$@"\n' > /tmp/fake-bin/curl
+          chmod +x /tmp/fake-bin/curl
+          echo "/tmp/fake-bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        # No version input — should resolve to latest release via gh api
+
+      - name: Assert tailor is installed
+        run: |
+          echo "Checking tailor is on PATH..."
+          if ! command -v tailor > /dev/null 2>&1; then
+            echo "FAIL: tailor not found on PATH"
+            exit 1
+          fi
+          echo "PASS: tailor is on PATH at $(command -v tailor)"

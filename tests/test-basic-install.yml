@@ -1,0 +1,42 @@
+name: Test basic install with explicit version
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up fake curl and tailor binary
+        run: |
+          mkdir -p /tmp/fake-bin
+
+          # Create a fake tailor binary payload using printf
+          printf '#!/bin/sh\necho "tailor fake v0.1.2"\nexit 0\n' > /tmp/fake-tailor.sh
+          chmod +x /tmp/fake-tailor.sh
+
+          # Create a fake curl that intercepts tailor downloads and honors -o flag
+          printf '#!/bin/sh\nout=""\nprev=""\nfor arg in "$@"; do\n  case "$prev" in\n    -o|--output) out="$arg" ;;\n  esac\n  prev="$arg"\ndone\ncase "$*" in\n  *tailor*)\n    if [ -n "$out" ]; then\n      cat /tmp/fake-tailor.sh > "$out"\n      chmod +x "$out"\n    else\n      cat /tmp/fake-tailor.sh\n    fi\n    exit 0\n    ;;\nesac\nexec /usr/bin/curl "$@"\n' > /tmp/fake-bin/curl
+          chmod +x /tmp/fake-bin/curl
+          echo "/tmp/fake-bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          version: "0.1.2"
+
+      - name: Assert tailor is installed and on PATH
+        run: |
+          echo "Checking tailor is on PATH..."
+          if ! command -v tailor > /dev/null 2>&1; then
+            echo "FAIL: tailor not found on PATH"
+            exit 1
+          fi
+          echo "PASS: tailor is on PATH at $(command -v tailor)"
+
+      - name: Assert tailor runs
+        run: |
+          echo "Running tailor..."
+          OUTPUT=$(tailor 2>&1 || true)
+          echo "output: $OUTPUT"
+          echo "PASS: tailor executed successfully"

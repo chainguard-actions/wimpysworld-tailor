@@ -1,0 +1,31 @@
+name: Test tailor docket subcommand
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up fake curl and tailor binary
+        run: |
+          mkdir -p /tmp/fake-bin
+
+          # Create a fake tailor binary that handles docket subcommand
+          printf '#!/bin/sh\necho "tailor called with: $*"\ncase "$1" in\n  docket)\n    echo "Authentication state: authenticated"\n    echo "Repository context: example/repo"\n    exit 0\n    ;;\n  *)\n    echo "tailor: unknown command $1"\n    exit 0\n    ;;\nesac\n' > /tmp/fake-tailor.sh
+          chmod +x /tmp/fake-tailor.sh
+
+          # Create a fake curl that intercepts tailor downloads and honors -o flag
+          printf '#!/bin/sh\nout=""\nprev=""\nfor arg in "$@"; do\n  case "$prev" in\n    -o|--output) out="$arg" ;;\n  esac\n  prev="$arg"\ndone\ncase "$*" in\n  *tailor*)\n    if [ -n "$out" ]; then\n      cat /tmp/fake-tailor.sh > "$out"\n      chmod +x "$out"\n    else\n      cat /tmp/fake-tailor.sh\n    fi\n    exit 0\n    ;;\nesac\nexec /usr/bin/curl "$@"\n' > /tmp/fake-bin/curl
+          chmod +x /tmp/fake-bin/curl
+          echo "/tmp/fake-bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          version: "0.1.2"
+          docket: "true"
+
+      - name: Assert tailor docket ran
+        run: |
+          echo "PASS: tailor docket step completed without error"

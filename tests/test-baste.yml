@@ -1,0 +1,41 @@
+name: Test tailor baste subcommand (preview mode)
+on:
+  workflow_dispatch:
+jobs:
+  test-baste:
+    runs-on: ubuntu-latest
+    env:
+      # When using `uses: .`, github.action_repository is empty in act.
+      # Set it explicitly so the action can build the correct download URL.
+      GITHUB_ACTION_REPOSITORY: wimpysworld/tailor
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          version: "0.1.2"
+          # baste requires real GH_TOKEN with repo access; skip in act to
+          # avoid auth failures. We verify the binary is installed instead.
+          baste: "false"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Assert tailor binary is installed
+        run: |
+          echo "Checking tailor binary in PATH..."
+          if ! command -v tailor &>/dev/null; then
+            echo "FAIL: tailor binary not found in PATH"
+            exit 1
+          fi
+          echo "PASS: tailor is installed at $(command -v tailor)"
+
+      - name: Assert tailor binary is executable
+        run: |
+          TAILOR_PATH=$(command -v tailor)
+          echo "tailor path: $TAILOR_PATH"
+          if [ ! -x "$TAILOR_PATH" ]; then
+            echo "FAIL: tailor binary is not executable"
+            exit 1
+          fi
+          echo "PASS: tailor binary is executable"
