@@ -6,10 +6,10 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 
 ## Versions
 
-| Version | Tag | Upstream commit |
-|---------|-----|-----------------|
-| v0.1.1 | [`v0.1.1`](https://github.com/chainguard-actions/wimpysworld-tailor/tree/v0.1.1) | [`703f10d`](https://github.com/wimpysworld/tailor/commit/703f10da7100987c19d93dbd04ae3ab8c22548b6) |
-| v0.1.2 | [`v0.1.2`](https://github.com/chainguard-actions/wimpysworld-tailor/tree/v0.1.2) | [`c1b09e5`](https://github.com/wimpysworld/tailor/commit/c1b09e5c15cc6e5da973f14dd04eaaf34063568f) |
+| Version | Tag | Upstream commit | Hardening report |
+|---------|-----|-----------------|------------------|
+| v0.1.1 | [`v0.1.1`](https://github.com/chainguard-actions/wimpysworld-tailor/tree/v0.1.1) | [`703f10d`](https://github.com/wimpysworld/tailor/commit/703f10da7100987c19d93dbd04ae3ab8c22548b6) | [`HARDENING.md`](https://github.com/chainguard-actions/wimpysworld-tailor/blob/v0.1.1/HARDENING.md) |
+| v0.1.2 | [`v0.1.2`](https://github.com/chainguard-actions/wimpysworld-tailor/tree/v0.1.2) | [`c1b09e5`](https://github.com/wimpysworld/tailor/commit/c1b09e5c15cc6e5da973f14dd04eaaf34063568f) | [`HARDENING.md`](https://github.com/chainguard-actions/wimpysworld-tailor/blob/v0.1.2/HARDENING.md) |
 
 ## Privacy
 
