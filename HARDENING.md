@@ -10,13 +10,30 @@
 
 **Harden Agent Version:** `2`
 
-Action **wimpysworld--tailor/v0.1.2** was hardened automatically. 2 finding(s) were identified and resolved across 1 iteration(s).
+Action **wimpysworld--tailor/v0.1.2** was hardened automatically. 3 finding(s) were identified and resolved across 1 iteration(s).
 
 ## Findings Fixed
 
+### github-env-injection (severity: high)
+
+Step 'Determine version' writes values derived from untrusted inputs (INPUT_VERSION from inputs.version, ACTION_REF from github.action_ref, and gh API output) to $GITHUB_OUTPUT without the sanitization step: `echo "tag=${v}" >> "$GITHUB_OUTPUT"` and `echo "version=${v#v}" >> "$GITHUB_OUTPUT"`. If the value contains a newline, extra outputs can be injected. Fix: `safe=$(printf '%s' "$v" | tr -d '\n\r')` before writing.
+
+Locations:
+
+- `action.yml:53`
+- `action.yml:54`
+
+### github-env-injection (severity: high)
+
+Step 'Install tailor' writes the inherited process env var RUNNER_TEMP to $GITHUB_PATH without sanitization: `echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"`. Under this check, env vars that the same script did not set count as workflow-controlled. Fix: `safe=$(printf '%s' "$RUNNER_TEMP" | tr -d '\n\r')` before writing.
+
+Locations:
+
+- `action.yml:78`
+
 ### script-injection (severity: high)
 
-The 'Install tailor' step in action.yml directly interpolates ${{ }} expressions inside the run: shell script, violating sub-rule (a). The following expressions are embedded directly in shell code before the shell ever sees them: `${{ runner.os }}` and `${{ runner.arch }}` in the case statement (line 64) and error echo (line 70); `${{ steps.version.outputs.tag }}` in the URL construction (line 75); and `${{ steps.version.outputs.version }}` in the final echo (line 79). Any ${{ ... }} expression directly inside a run: block is a script-injection risk regardless of context (runner.*, steps.*.outputs.*, etc.). These should be moved to env: variables and referenced as quoted shell variables (e.g. "$RUNNER_OS", "$RUNNER_ARCH", "$STEP_TAG").
+Rule (a) is violated in step 'Install tailor': GitHub expressions are put straight into the run: script. Offending lines: `case "${{ runner.os }}-${{ runner.arch }}" in`, `echo "::error::Unsupported platform: ${{ runner.os }}-${{ runner.arch }}"`, `url="https://github.com/${ACTION_REPO}/releases/download/${{ steps.version.outputs.tag }}/tailor-${os}-${arch}"`, `echo "Installed tailor ${{ steps.version.outputs.version }} for ${os}/${arch}"`. The steps.version outputs come from inputs.version, so an attacker can control them. Fix: use "$RUNNER_OS"/"$RUNNER_ARCH" and pass the step outputs in through env: variables, quoted where they are used.
 
 Locations:
 
@@ -25,26 +42,13 @@ Locations:
 - `action.yml:75`
 - `action.yml:79`
 
-### github-env-injection (severity: high)
-
-The 'Determine version' step writes the variable `v` to $GITHUB_OUTPUT (lines 53–54) without the required sanitization step (`printf '%s' "$v" | tr -d '\n\r'`). The value of `v` is derived from the inherited env var `${INPUT_VERSION}` (mapped from `inputs.version`, a caller-controlled input) or `${ACTION_REF}` (mapped from `github.action_ref`, a github context value). Both are untrusted sources. A newline embedded in either value could inject arbitrary key=value pairs into $GITHUB_OUTPUT, allowing an attacker to poison subsequent steps' outputs. The fix is to sanitize before writing: `safe=$(printf '%s' "$v" | tr -d '\n\r')` and then `echo "tag=${safe}" >> "$GITHUB_OUTPUT"`.
-
-Locations:
-
-- `action.yml:53`
-- `action.yml:54`
-
 ## Iteration Notes
 
 ### Iteration 1
 
-**Fixes applied:** script-injection, github-env-injection
+**Fixes applied:** github-env-injection, script-injection
 
 **Notes:**
 
-Fixed two high-severity findings in hardened/action/action.yml:
-
-1. github-env-injection: Added sanitization before writing to $GITHUB_OUTPUT in the 'Determine version' step. Values derived from caller-controlled inputs and github context are now sanitized with `printf '%s' "${v}" | tr -d '\n\r'` before being written as `tag` and `version` outputs.
-
-2. script-injection: In the 'Install tailor' step, moved all four ${{ }} expressions out of the run: shell script into the env: block — runner.os → RUNNER_OS, runner.arch → RUNNER_ARCH, steps.version.outputs.tag → STEP_TAG, steps.version.outputs.version → STEP_VERSION. The shell script now references these as plain environment variables, preventing any expression value from being interpreted as shell code.
+Determine version: the version value now has newlines stripped (tr -d '\n\r') before it is written to GITHUB_OUTPUT. Install tailor: RUNNER_TEMP has newlines stripped before it is written to GITHUB_PATH. The runner.os and runner.arch expressions are replaced with $RUNNER_OS and $RUNNER_ARCH. The steps.version outputs are now passed in through env (VERSION_TAG, VERSION_NUM) and quoted where they are used. Because the mirror has no releases of its own, the release lookup and download now point at upstream: ACTION_REPO is set to 'wimpysworld/tailor' (from action_name) instead of github.action_repository, and ACTION_REF is set to 'v0.1.2' (upstream_version) instead of github.action_ref.
 

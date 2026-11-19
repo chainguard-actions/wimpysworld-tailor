@@ -1,5 +1,5 @@
 name: "Tailor your Templates"
-description: "Install and run the tailor CLI to measure, fit, and alter your GitHub project templates \U0001FAA1"
+description: "Install and run the tailor CLI to measure, fit, and alter your GitHub project templates 🪡"
 branding:
   icon: "scissors"
   color: "purple"
@@ -67,15 +67,15 @@ runs:
         else
           v=$(gh api "repos/${ACTION_REPO}/releases/latest" --jq '.tag_name')
         fi
-        safe_tag=$(printf '%s' "${v}" | tr -d '\n\r')
-        safe_version=$(printf '%s' "${v#v}" | tr -d '\n\r')
-        echo "tag=${safe_tag}" >> "$GITHUB_OUTPUT"
-        echo "version=${safe_version}" >> "$GITHUB_OUTPUT"
+        safe=$(printf '%s' "$v" | tr -d '\n\r')
+        echo "tag=${safe}" >> "$GITHUB_OUTPUT"
+        echo "version=${safe#v}" >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ github.token }}
         INPUT_VERSION: ${{ inputs.version }}
-        ACTION_REF: ${{ github.action_ref }}
-        ACTION_REPO: ${{ github.action_repository }}
+        ACTION_REF: 'v0.1.2'
+        ACTION_REPO: 'wimpysworld/tailor'
+
     - name: Install tailor
       shell: bash
       run: |
@@ -90,33 +90,37 @@ runs:
             ;;
         esac
 
-        url="https://github.com/${ACTION_REPO}/releases/download/${STEP_TAG}/tailor-${os}-${arch}"
+        url="https://github.com/${ACTION_REPO}/releases/download/${VERSION_TAG}/tailor-${os}-${arch}"
         curl -fsSL "${url}" -o "${RUNNER_TEMP}/tailor"
         chmod +x "${RUNNER_TEMP}/tailor"
-        echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
-        echo "Installed tailor ${STEP_VERSION} for ${os}/${arch}"
+        safe_path=$(printf '%s' "$RUNNER_TEMP" | tr -d '\n\r')
+        echo "${safe_path}" >> "$GITHUB_PATH"
+        echo "Installed tailor ${VERSION_NUM} for ${os}/${arch}"
       env:
-        ACTION_REPO: ${{ github.action_repository }}
-        RUNNER_OS: ${{ runner.os }}
-        RUNNER_ARCH: ${{ runner.arch }}
-        STEP_TAG: ${{ steps.version.outputs.tag }}
-        STEP_VERSION: ${{ steps.version.outputs.version }}
+        ACTION_REPO: 'wimpysworld/tailor'
+        VERSION_TAG: ${{ steps.version.outputs.tag }}
+        VERSION_NUM: ${{ steps.version.outputs.version }}
+
     - name: Run tailor fit
       if: inputs.fit == 'true'
       shell: bash
       run: tailor fit .
+
     - name: Run tailor alter
       if: inputs.alter == 'true'
       shell: bash
       run: tailor alter
+
     - name: Run tailor baste
       if: inputs.baste == 'true'
       shell: bash
       run: tailor baste
+
     - name: Run tailor measure
       if: inputs.measure == 'true'
       shell: bash
       run: tailor measure
+
     - name: Run tailor docket
       if: inputs.docket == 'true'
       shell: bash
